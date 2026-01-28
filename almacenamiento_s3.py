@@ -373,3 +373,11 @@ print("\nResultados de la consulta JSON:")
 for row in result_json['ResultSet']['Rows']:
     values = [col.get('VarCharValue', '') for col in row['Data']]
     print(values)
+    
+# Eliminar la tabla y la base de datos (opcional)
+# athena.start_query_execution(
+#     QueryString=f'''
+#     DROP TABLE IF EXISTS {database_name}.{table_name_json}
+#     ''',
+#     ResultConfiguration={'OutputLocation': output_location}
+# )
