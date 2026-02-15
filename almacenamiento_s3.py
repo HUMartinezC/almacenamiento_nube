@@ -675,3 +675,17 @@ while result_disponibles['QueryExecution']['Status']['State'] in ['QUEUED', 'RUN
 #     bucket.objects.all().delete()
 #     bucket.delete()
     
+# Inicializamos Glue para eliminar las bases de datos y tablas creadas (opcional)
+glue = session.client('glue')
+
+# Eliminar tablas y bases de datos en Glue
+# for db in [database_name, db_name]:
+#     try:
+#         tables = glue.get_tables(DatabaseName=db)['TableList']
+#         for table in tables:
+#             glue.delete_table(DatabaseName=db, Name=table['Name'])
+#             print(f'Tabla {table["Name"]} eliminada de la base de datos {db}.')
+#         glue.delete_database(Name=db)
+#         print(f'Base de datos {db} eliminada.')
+#     except glue.exceptions.EntityNotFoundException:
+#         print(f'Base de datos {db} no encontrada, no se eliminó.')
