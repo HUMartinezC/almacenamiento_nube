@@ -23,6 +23,12 @@ def create_bucket_with_region(s3_resource, bucket_name, region):
         CreateBucketConfiguration={'LocationConstraint': region}
     )
 
+# Crear carpeta local para descargas
+download_folder = './descargas'
+if not os.path.exists(download_folder):
+    os.makedirs(download_folder)
+    print(f'Carpeta {download_folder} creada para descargas.')
+
 # Probar la conexión listando los buckets
 s3 = session.resource('s3')
 for bucket in s3.buckets.all():
@@ -116,7 +122,7 @@ def generar_datos_y_guardar_en_s3(generar=False, num_registros=100):
     print(f'\nArchivo datos_practicas.csv subido a {folder_name}csv/ en el bucket {bucket_name}.')
     
     # Descargar el archivo para verificar que se ha subido correctamente
-    local_file = './datos_practicas.csv'
+    local_file = os.path.join(download_folder, 'datos_practicas.csv')
     bucket.download_file(f'{folder_name}csv/datos_practicas.csv', local_file)
     print(f"Archivo descargado para verificación: {local_file}")
     
@@ -281,7 +287,7 @@ def generar_datos_json_y_guardar_en_s3(generar=False, num_registros=100):
     print(f'\nArchivo datos_practicas.json subido a {folder_name}json/ en el bucket {bucket_name}.')
     
     # Descargar el archivo para verificar que se ha subido correctamente
-    local_file = './datos_practicas.json'
+    local_file = os.path.join(download_folder, 'datos_practicas.json')
     bucket.download_file(f'{folder_name}json/datos_practicas.json', local_file)
     print(f"Archivo descargado para verificación: {local_file}")
 
@@ -370,7 +376,7 @@ else:
  
 json_objects = list(bucket.objects.filter(Prefix=f'{folder_name}json/'))
 for obj in json_objects:
-    local_file = f"./{obj.key.split('/')[-1]}"
+    local_file = os.path.join(download_folder, obj.key.split('/')[-1])
     bucket.download_file(obj.key, local_file)
     print(f"Descargado: {local_file}")
     
@@ -543,7 +549,7 @@ while result_fecha['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']
 # Descargar los resultados de las 3 consultas para verificación
 athena_results_bucket = s3.Bucket(bucket_name)
 for obj in athena_results_bucket.objects.filter(Prefix='resultados_estudiantes/'):
-    local_file = f"./{obj.key.split('/')[-1]}"
+    local_file = os.path.join(download_folder, obj.key.split('/')[-1])
     athena_results_bucket.download_file(obj.key, local_file)
     print(f"Archivo de resultados descargado para verificación: {local_file}")
 
@@ -676,7 +682,7 @@ while result_disponibles['QueryExecution']['Status']['State'] in ['QUEUED', 'RUN
 #     bucket.delete()
     
 # Inicializamos Glue para eliminar las bases de datos y tablas creadas (opcional)
-glue = session.client('glue')
+# glue = session.client('glue')
 
 # Eliminar tablas y bases de datos en Glue
 # for db in [database_name, db_name]:
