@@ -3,10 +3,11 @@ import boto3
 from dotenv import load_dotenv
 import os
 import uuid
+from datetime import datetime
+import faker
 
 load_dotenv()
 
-# Creamos una sesión de boto3
 session = boto3.Session(
     aws_access_key_id=os.getenv("ACCESS_KEY"),
     aws_secret_access_key=os.getenv("SECRET_KEY"),
@@ -14,7 +15,7 @@ session = boto3.Session(
     region_name=os.getenv("REGION"),
 )
 
-# Probamos la conexión listando las instancias EC2 contando el número de instancias
+
 ec2 = session.client("ec2")
 
 response = ec2.describe_instances()
@@ -25,10 +26,10 @@ instance_count = sum(
 
 print(f"Número de instancias EC2 actual: {instance_count}")
 
+
 # --------------------------------
 # Gestión de instancias EC2: crear, ejecutar, parar y eliminar.
 # --------------------------------
-
 
 class EC2Manager:
     def __init__(
@@ -47,6 +48,7 @@ class EC2Manager:
 
     def crear_instancia(self):
         """Crear una instancia EC2"""
+        print(self.key_name)
         response = ec2.run_instances(
             ImageId=self.ami_id,
             InstanceType=self.instance_type,
@@ -64,6 +66,20 @@ class EC2Manager:
                 "Debes proporcionar un ID de instancia o crear una previamente."
             )
         return self.instance_id or instance_id
+
+    def _find_free_device(self, instance_id):
+        description = ec2.describe_instances(InstanceIds=[instance_id])
+        instance_data = description["Reservations"][0]["Instances"][0]
+        used_devices = {
+            mapping.get("DeviceName")
+            for mapping in instance_data.get("BlockDeviceMappings", [])
+            if mapping.get("DeviceName")
+        }
+        for letter in "fghijklmnop":
+            device_name = f"/dev/sd{letter}"
+            if device_name not in used_devices:
+                return device_name
+        raise ValueError("No hay device libre disponible para adjuntar el volumen EBS.")
 
     def parar_instancia(self, instance_id=None):
         """Parar la instancia EC2"""
@@ -106,12 +122,11 @@ class EC2Manager:
         """Detener y eliminar la instancia"""
         self._get_instance_id(instance_id)
         instance_id = self.instance_id or instance_id
-        # Detener la instancia
+
         ec2.stop_instances(InstanceIds=[instance_id])
         print(f"Instancia {instance_id} detenida.")
         self.esperar_estado("stopped", instance_id=instance_id)
 
-        # Terminar la instancia
         ec2.terminate_instances(InstanceIds=[instance_id])
         print(f"Instancia {instance_id} eliminada.")
 
@@ -143,17 +158,19 @@ class EC2Manager:
         return public_ip
 
     def asignar_volumen_ebs(
-        self, volume_id, instance_id=None, device="/dev/sdf"
+        self, volume_id, instance_id=None, device=None
     ):
         """Asignar un volumen EBS a la instancia"""
         self._get_instance_id(instance_id)
         instance_id = self.instance_id or instance_id
+        device = device or self._find_free_device(instance_id)
         ec2.attach_volume(
             VolumeId=volume_id,
             InstanceId=instance_id,
             Device=device,
         )
-        print(f"Volumen {volume_id} asignado a la instancia {instance_id}.")
+        print(f"Volumen {volume_id} asignado a la instancia {instance_id} en {device}.")
+        return device
 
     def montar_volumen_ebs_en_instancia(
         self,
@@ -165,11 +182,9 @@ class EC2Manager:
         """Montar el volumen EBS en la instancia (requiere acceso SSH)"""
         import paramiko
 
-        # Configurar la conexión SSH
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        # Cargar clave privada
         key = paramiko.RSAKey.from_private_key_file(os.getenv("PEM_FILE"))
 
         ssh.connect(
@@ -291,35 +306,35 @@ class EC2Manager:
         ssh.close()
 
 
-# 1. Probar la creación, ejecución, parada y eliminación de la instancia
-
-# Instancia EC2 Manager
 ec2_manager = EC2Manager(ami_id="ami-07ff62358b87c7116", instance_name="Test")
 
-# Crear y ejecutar instancia
-ec2_manager.crear_instancia()
 
-# Asignar etiqueta
-ec2_manager.aplicar_etiqueta(tag="EC2-Test")
+# 1. Probar la creación, ejecución, parada y eliminación de la instancia
 
-# Esperar a que esté en ejecución
-ec2_manager.esperar_estado("running")
+# # Crear y ejecutar instancia
+# ec2_manager.crear_instancia()
 
-# Parar ejecución
-ec2_manager.parar_instancia()
+# # Asignar etiqueta
+# ec2_manager.aplicar_etiqueta(tag="EC2-Test")
 
-# Esperar a que esté detenida
-ec2_manager.esperar_estado("stopped")
+# # Esperar a que esté en ejecución
+# ec2_manager.esperar_estado("running")
 
-# Eliminar instancia
-ec2_manager.eliminar_instancia()
+# # Parar ejecución
+# ec2_manager.parar_instancia()
+
+# # Esperar a que esté detenida
+# ec2_manager.esperar_estado("stopped")
+
+# # Eliminar instancia
+# ec2_manager.eliminar_instancia()
 
 
-# Crear un volumen EBS y asignarlo a la instancia creada
+# 2. Crear un volumen EBS y asignarlo a la instancia creada
 
 # Crear una nueva instancia para pruebas
-ec2_manager.crear_instancia()
-ec2_manager.esperar_estado("running")
+# ec2_manager.crear_instancia()
+# ec2_manager.esperar_estado("running")
 
 instance_id = ec2_manager.instance_id or os.getenv("INSTANCE_ID")
 if instance_id:
@@ -335,7 +350,7 @@ if instance_id:
     print(f"Volumen {volumen_id} está disponible.")
     
     # Asignar volumen EBS a la instancia
-    ec2_manager.asignar_volumen_ebs(
+    device_name = ec2_manager.asignar_volumen_ebs(
         volume_id=volumen_id, instance_id=instance_id
     )
 else:
@@ -345,10 +360,398 @@ else:
 
 instance_ip = ec2_manager.obtener_ip_publica(instance_id=instance_id)
 
-ec2_manager.montar_volumen_ebs_en_instancia(instance_ip=instance_ip)
+mount_device = device_name.replace("/dev/sd", "/dev/xvd")
+ec2_manager.montar_volumen_ebs_en_instancia(
+    instance_ip=instance_ip,
+    device=mount_device,
+)
 
 # Crear EFS, montar en la instancia y añadir un archivo de prueba
 ec2_manager.crear_efs_y_montar_en_instancia(
     instance_ip=instance_ip,
     instance_id=instance_id
 )
+
+
+# Probar la conexión listando los buckets
+s3 = session.resource('s3')
+for bucket in s3.buckets.all():
+    print(bucket.name)
+    
+
+# Crear bucket si no existe
+bucket_name = 'gestion-practicas-bucket'
+
+existing_buckets = [b.name for b in s3.buckets.all()]
+
+if bucket_name not in existing_buckets:
+    s3.create_bucket(
+        Bucket=bucket_name
+    )
+    print(f'\nBucket {bucket_name} creado.')
+else:
+    print(f'\nBucket {bucket_name} ya existe.')
+    
+    
+# Crear carpetas dentro del bucket con jerarquía gestion/dia/mes/ano
+base_prefix = "gestion/"
+today = datetime.utcnow()
+day = today.strftime("%d")
+month = today.strftime("%m")
+year = today.strftime("%Y")
+folder_name = f"{base_prefix}{day}/{month}/{year}/"
+
+folder_prefixes = [
+    base_prefix,
+    f"{base_prefix}{day}/",
+    f"{base_prefix}{day}/{month}/",
+    folder_name,
+    f"{folder_name}csv/",
+    f"{folder_name}json/",
+]
+
+for prefix in folder_prefixes:
+    s3.Object(bucket_name, prefix).put()
+    print(f"\nCarpeta {prefix} creada/verificada en el bucket {bucket_name}.")
+    
+# Función para generar datos sintéticos, flag para indicar si se deben generar o no
+def generar_datos_y_guardar_en_s3(generar=False, num_registros=100):
+    if not generar:
+        print("Generación de datos sintéticos desactivada.")
+        return
+    
+    fake = faker.Faker('es_ES')
+    
+    estudiantes = []
+    for _ in range(num_registros):
+        id_estudiante = fake.random_int(min=1, max=1000)
+        dni = fake.random_int(min=10000000, max=99999999)
+        nombre_completo = fake.name()
+        fecha_nacimiento = fake.date_of_birth(minimum_age=18, maximum_age=30)
+        email = fake.email()
+        telefono = fake.phone_number()
+        direccion = fake.address().replace('\n', ', ')
+        nacionalidad = fake.country()
+        id_centro = fake.random_int(min=1, max=50)
+        titulacion = fake.word().capitalize()
+        curso_academico = f"{fake.random_int(min=2018, max=2023)}-{fake.random_int(min=2019, max=2024)}"
+        
+        
+        registro = (
+            id_estudiante,
+            dni,
+            nombre_completo,
+            fecha_nacimiento,
+            email,
+            telefono,
+            direccion,
+            nacionalidad,
+            id_centro,
+            titulacion,
+            curso_academico
+        )
+        estudiantes.append(registro)
+    
+    # Guardar los datos en un archivo CSV
+    
+    import csv
+    import io
+    
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    
+    writer.writerow([
+        'id_estudiante', 'dni', 'nombre_completo', 'fecha_nacimiento',
+        'email', 'telefono', 'direccion', 'nacionalidad', 'id_centro', 'titulacion', 'curso_academico'
+    ])
+    writer.writerows(estudiantes)
+    
+    csv_content = buffer.getvalue()
+    buffer.close()
+    
+    # Comprobar el contenido generado
+    print("\nContenido del archivo CSV generado:")
+    print(csv_content)
+        
+    # Subir el archivo CSV al bucket S3 en una subcarpeta específica
+    csv_key = f"{folder_name}csv/datos_practicas.csv"
+    s3.Object(bucket_name, csv_key).put(Body=csv_content)
+    print(f"\nArchivo datos_practicas.csv subido a {csv_key} en el bucket {bucket_name}.")
+
+    # Obtener el objeto desde S3
+    csv_obj = s3.Object(bucket_name, csv_key).get()
+    csv_data = csv_obj["Body"].read().decode("utf-8")
+    print("\nContenido del archivo CSV obtenido desde S3:")
+    print("\n".join(csv_data.splitlines()[:5]))
+    
+# Llamar a la función para generar datos y guardarlos en S3
+generar_datos_y_guardar_en_s3(generar=True, num_registros=100)
+
+
+# Athena
+
+import time
+
+athena = session.client('athena')
+
+database_name = 'gestion_practicas_db'
+
+output_location = f's3://{bucket_name}/resultados_estudiantes/'
+
+# Crear base de datos
+db_execution = athena.start_query_execution(
+    QueryString=f'''
+    CREATE DATABASE IF NOT EXISTS {database_name}
+    ''',
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que termine la creación de la base de datos
+db_result = athena.get_query_execution(QueryExecutionId=db_execution['QueryExecutionId'])
+while db_result['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    db_result = athena.get_query_execution(QueryExecutionId=db_execution['QueryExecutionId'])
+
+print(f"Base de datos {database_name} creada/verificada")
+
+table_name = 'estudiantes_practicas'
+
+# Eliminar la tabla si ya existe
+drop_execution = athena.start_query_execution(
+    QueryString=f'''
+    DROP TABLE IF EXISTS {database_name}.{table_name}
+    ''',
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que termine el DROP
+drop_result = athena.get_query_execution(QueryExecutionId=drop_execution['QueryExecutionId'])
+while drop_result['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    drop_result = athena.get_query_execution(QueryExecutionId=drop_execution['QueryExecutionId'])
+
+print(f"Tabla {table_name} eliminada (si existía)")
+
+# Definir la consulta para crear la tabla
+create_table_query = f'''
+CREATE EXTERNAL TABLE IF NOT EXISTS {database_name}.{table_name} (
+    id_estudiante INT,
+    dni INT,
+    nombre_completo STRING,
+    fecha_nacimiento STRING,
+    email STRING,
+    telefono STRING,
+    direccion STRING,
+    nacionalidad STRING,
+    id_centro INT,
+    titulacion STRING,
+    curso_academico STRING
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+    'separatorChar' = ',',
+    'quoteChar' = '\"',
+    'escapeChar' = '\\\\'
+)
+LOCATION 's3://{bucket_name}/{folder_name}csv/'
+TBLPROPERTIES (
+    'skip.header.line.count'='1',
+    'has_encrypted_data'='false'
+);
+'''
+
+# Ejecutar la consulta para crear la tabla
+create_execution = athena.start_query_execution(
+    QueryString=create_table_query,
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que termine la creación de la tabla
+create_result = athena.get_query_execution(QueryExecutionId=create_execution['QueryExecutionId'])
+while create_result['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    create_result = athena.get_query_execution(QueryExecutionId=create_execution['QueryExecutionId'])
+
+print(f"Tabla {table_name} creada exitosamente")
+
+# Consultar los datos para verificar que se han cargado correctamente
+query_execution = athena.start_query_execution(
+    QueryString=f'''
+    SELECT * FROM {database_name}.{table_name} LIMIT 10
+    ''',
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que la consulta termine
+result = athena.get_query_execution(QueryExecutionId=query_execution['QueryExecutionId'])
+while result['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    result = athena.get_query_execution(QueryExecutionId=query_execution['QueryExecutionId'])
+
+# Verificar si la consulta falló
+if result['QueryExecution']['Status']['State'] == 'FAILED':
+    print(f"Error en la consulta CSV: {result['QueryExecution']['Status'].get('StateChangeReason', 'Error desconocido')}")
+else:
+    print(f"Consulta CSV completada exitosamente")
+
+# Obtener los resultados de la consulta
+result = athena.get_query_results(QueryExecutionId=query_execution['QueryExecutionId'])
+
+print("\nResultados de la consulta:")
+
+for row in result['ResultSet']['Rows']:
+    # Cada fila es una lista de diccionarios {'VarCharValue': valor}
+    values = [col.get('VarCharValue', '') for col in row['Data']]
+    print(values)
+
+
+# Eliminar la tabla y la base de datos (opcional)
+# athena.start_query_execution(
+#     QueryString=f'''
+#     DROP TABLE IF EXISTS {database_name}.{table_name}
+#     ''',
+#     ResultConfiguration={'OutputLocation': output_location}
+# )
+
+
+# Replicar lo mismo pero con formato JSON
+
+
+def generar_datos_json_y_guardar_en_s3(generar=False, num_registros=100):
+    if not generar:
+        print("Generación de datos sintéticos en JSON desactivada.")
+        return
+    
+    fake = faker.Faker('es_ES')
+    
+    estudiantes = []
+    for _ in range(num_registros):
+        estudiante = {
+            "id_estudiante": fake.random_int(min=1, max=1000),
+            "dni": fake.random_int(min=10000000, max=99999999),
+            "nombre_completo": fake.name(),
+            "fecha_nacimiento": str(fake.date_of_birth(minimum_age=18, maximum_age=30)),
+            "email": fake.email(),
+            "telefono": fake.phone_number(),
+            "direccion": fake.address().replace('\n', ', '),
+            "nacionalidad": fake.country(),
+            "id_centro": fake.random_int(min=1, max=50),
+            "titulacion": fake.word().capitalize(),
+            "curso_academico": f"{fake.random_int(min=2018, max=2023)}-{fake.random_int(min=2019, max=2024)}"
+        }
+        estudiantes.append(estudiante)
+    
+    import json
+    import io
+    
+    buffer = io.StringIO()
+    for estudiante in estudiantes:
+        buffer.write(json.dumps(estudiante) + '\n')
+    
+    json_content = buffer.getvalue()
+    buffer.close()
+    
+    # Comprobar el contenido generado
+    print("\nContenido del archivo JSON generado:")
+    print(json_content)
+        
+    # Subir el archivo JSON al bucket S3 en una subcarpeta específica
+    s3.Object(bucket_name, f"{folder_name}json/datos_practicas.json").put(Body=json_content)
+    print(f"\nArchivo datos_practicas.json subido a {folder_name}json/ en el bucket {bucket_name}.")
+
+
+# Llamar a la función para generar datos JSON y guardarlos en S3
+generar_datos_json_y_guardar_en_s3(generar=True, num_registros=100)
+
+# Athena
+
+table_name_json = 'estudiantes_practicas_json'
+
+# Eliminar la tabla si ya existe
+drop_execution_json = athena.start_query_execution(
+    QueryString=f'''
+    DROP TABLE IF EXISTS {database_name}.{table_name_json}
+    ''',
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que termine el DROP
+drop_result_json = athena.get_query_execution(QueryExecutionId=drop_execution_json['QueryExecutionId'])
+while drop_result_json['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    drop_result_json = athena.get_query_execution(QueryExecutionId=drop_execution_json['QueryExecutionId'])
+
+print(f"Tabla {table_name_json} eliminada (si existía)")
+
+# Definir la consulta para crear la tabla en formato JSON
+
+create_table_query_json = f'''
+CREATE EXTERNAL TABLE IF NOT EXISTS {database_name}.{table_name_json} (
+    id_estudiante INT,
+    dni INT,
+    nombre_completo STRING,
+    fecha_nacimiento STRING,
+    email STRING,
+    telefono STRING,
+    direccion STRING,
+    nacionalidad STRING,
+    id_centro INT,
+    titulacion STRING,
+    curso_academico STRING
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 's3://{bucket_name}/{folder_name}json/'
+TBLPROPERTIES (
+    'has_encrypted_data'='false'
+);
+''' 
+
+# Ejecutar la consulta para crear la tabla JSON
+create_execution_json = athena.start_query_execution(
+    QueryString=create_table_query_json,
+    ResultConfiguration={'OutputLocation': output_location}
+)
+
+# Esperar a que termine la creación de la tabla JSON
+create_result_json = athena.get_query_execution(QueryExecutionId=create_execution_json['QueryExecutionId'])
+while create_result_json['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    create_result_json = athena.get_query_execution(QueryExecutionId=create_execution_json['QueryExecutionId'])
+
+print(f"Tabla {table_name_json} creada exitosamente")
+
+# Consultar los datos para verificar que se han cargado correctamente
+query_execution_json = athena.start_query_execution(
+    QueryString=f'''
+    SELECT * FROM {database_name}.{table_name_json} LIMIT 10
+    ''',
+    ResultConfiguration={'OutputLocation': output_location}
+) 
+
+# Esperar a que la consulta termine
+result_json = athena.get_query_execution(QueryExecutionId=query_execution_json['QueryExecutionId'])
+while result_json['QueryExecution']['Status']['State'] in ['QUEUED', 'RUNNING']:
+    time.sleep(1)
+    result_json = athena.get_query_execution(QueryExecutionId=query_execution_json['QueryExecutionId'])
+
+# Verificar si la consulta falló
+if result_json['QueryExecution']['Status']['State'] == 'FAILED':
+    print(f"Error en la consulta JSON: {result_json['QueryExecution']['Status'].get('StateChangeReason', 'Error desconocido')}")
+else:
+    print(f"Consulta JSON completada exitosamente")
+    
+# Obtener los resultados de la consulta JSON
+result_json = athena.get_query_results(QueryExecutionId=query_execution_json['QueryExecutionId'])
+
+print("\nResultados de la consulta JSON:")
+for row in result_json['ResultSet']['Rows']:
+    values = [col.get('VarCharValue', '') for col in row['Data']]
+    print(values)
+    
+# Eliminar la tabla y la base de datos (opcional)
+# athena.start_query_execution(
+#     QueryString=f'''
+#     DROP TABLE IF EXISTS {database_name}.{table_name_json}
+#     ''',
+#     ResultConfiguration={'OutputLocation': output_location}
+# )
